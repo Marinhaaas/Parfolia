@@ -24,8 +24,8 @@ try:
     CUSTOMER_ID = st.secrets["google_ads"]["customer_id"]
     
     CONSTRUCTOR_KEYS = {
-        "pt": st.secrets["constructor"]["key_pt"],
-        "es": st.secrets["constructor"]["key_es"]
+        "pt": st.secrets["constructor_keys"]["pt"],
+        "es": st.secrets["constructor_keys"]["es"]
     }
     
     # Inicializa o cliente oficial do Gemini com a chave dos secrets
