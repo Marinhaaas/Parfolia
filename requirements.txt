@@ -3,3 +3,4 @@ pandas
 requests
 google-ads
 openpyxl
+google-genai
