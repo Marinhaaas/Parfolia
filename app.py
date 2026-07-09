@@ -136,6 +136,29 @@ def get_constructor_products(query, constructor_key):
     return []
 
 # =====================================================================
+# GERADOR DE SEO GRATUITO (ALGORÍTMICO DE ALTA CONVERSÃO)
+# =====================================================================
+def generate_seo_metadata(keyword, country_code):
+    """
+    Gera títulos H1 e Meta Descriptions otimizados e dinâmicos de forma gratuita
+    com base na keyword e no idioma selecionado.
+    """
+    clean_kw = keyword.strip().title()
+    
+    # Remover termos soltos de intenção para o H1 soar natural
+    for clean_term in ["Como", "Qual", "Onde", "Para", "De", "Com", "Online"]:
+        clean_kw = clean_kw.replace(f" {clean_term} ", " ").replace(f"{clean_term} ", "")
+    
+    if country_code == "pt":
+        h1 = f"{clean_kw.strip()}"
+        description = f"Descubra a nossa coleção exclusiva de {keyword.lower()}. Encontre os melhores estilos online com portes grátis disponíveis e envios rápidos!"
+    else:  # es
+        h1 = f"{clean_kw.strip()}"
+        description = f"Descubre nuestra colección exclusiva de {keyword.lower()}. ¡Encuentra los mejores estilos online con envío rápido y devoluciones sencillas!"
+        
+    return h1, description
+
+# =====================================================================
 # INTERFACE INTERATIVA (STREAMLIT UI)
 # =====================================================================
 st.set_page_config(page_title="SEO Keyword Research Tool", page_icon="🔍", layout="wide")
@@ -157,6 +180,10 @@ CURRENT_CONSTRUCTOR_KEY = CONSTRUCTOR_KEYS.get(selected_country_code, CONSTRUCTO
 
 # Input de texto principal
 seed_input = st.text_input("Palavra Semente (Seed Keyword):", placeholder="Ex: vestido de cerimónia")
+
+# Inicializar o estado da tabela para guardar os dados entre cliques e interações de checkbox
+if "df_results" not in st.session_state:
+    st.session_state.df_results = None
 
 if st.button("🚀 Iniciar Análise Corrente", type="primary"):
     if not seed_input.strip():
@@ -206,31 +233,74 @@ if st.button("🚀 Iniciar Análise Corrente", type="primary"):
                 
                 progress_bar.empty()
                 top_df['Produtos Constructor'] = product_data
-
-                # Renderização da Tabela de Dados interativa
-                st.subheader("📊 Resultados de Top 50 Keywords")
-                st.dataframe(
-                    top_df, 
-                    use_container_width=True,
-                    column_config={
-                        "Volume Médio Mensal (12 meses)": st.column_config.NumberColumn(format="%d"),
-                        "Volume Médio Mensal (3 meses)": st.column_config.NumberColumn(format="%d")
-                    }
-                )
-
-                # Criação do Buffer de Download em formato Excel
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    top_df.to_excel(writer, index=False)
                 
-                filename = f"seo_{selected_country_code}_{seed.replace(' ', '_')}.xlsx"
-                st.download_button(
-                    label="📥 Descarregar Dados em Excel (.xlsx)",
-                    data=buffer.getvalue(),
-                    file_name=filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                # Nova Coluna de Seleção para o utilizador marcar linhas
+                top_df.insert(0, "Selecionar", False)
+                st.session_state.df_results = top_df
             else:
                 st.warning("⚠️ A API do Google Ads não retornou dados para estas keywords.")
+                st.session_state.df_results = None
         else:
             st.error("❌ Nenhuma keyword válida sobrou após a filtragem de marcas proibidas.")
+            st.session_state.df_results = None
+
+# Se existirem dados guardados em cache, mostra o editor interativo
+if st.session_state.df_results is not None:
+    st.subheader("📊 Resultados de Top 50 Keywords")
+    st.markdown("💡 *Ative a caixa de seleção na coluna **'Selecionar'** para escolher as linhas que deseja processar e exportar.*")
+    
+    # Renderiza a tabela usando o data_editor, permitindo a edição apenas da coluna "Selecionar"
+    edited_df = st.data_editor(
+        st.session_state.df_results,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Selecionar": st.column_config.CheckboxColumn("Selecionar", default=False),
+            "Volume Médio Mensal (12 meses)": st.column_config.NumberColumn(format="%d", disabled=True),
+            "Volume Médio Mensal (3 meses)": st.column_config.NumberColumn(format="%d", disabled=True),
+            "Keyword": st.column_config.TextColumn(disabled=True),
+            "Produtos Constructor": st.column_config.TextColumn(disabled=True)
+        }
+    )
+    
+    # Filtrar o DataFrame original com base no que o utilizador selecionou no editor visual
+    selected_rows = edited_df[edited_df["Selecionar"] == True].copy()
+    
+    if not selected_rows.empty:
+        st.success(f"✅ {len(selected_rows)} linha(s) selecionada(s). Pronta(s) para enriquecimento de SEO e exportação!")
+        
+        # Gerar metadados em tempo real apenas para os itens escolhidos
+        h1_list = []
+        desc_list = []
+        for kw in selected_rows['Keyword']:
+            h1, desc = generate_seo_metadata(kw, selected_country_code)
+            h1_list.append(h1)
+            desc_list.append(desc)
+            
+        selected_rows['SEO H1 Gerado'] = h1_list
+        selected_rows['SEO Meta Description'] = desc_list
+        
+        # Remove a coluna booleana técnica de seleção antes do output final
+        export_df = selected_rows.drop(columns=["Selecionar"])
+        
+        # Mostrar uma antevisão rápida do que vai para o Excel
+        st.write("👀 **Antevisão dos Metadados SEO Gerados Gratuitamente:**")
+        st.dataframe(export_df[['Keyword', 'SEO H1 Gerado', 'SEO Meta Description']], use_container_width=True, hide_index=True)
+        
+        # Criação do Buffer de Download para o ficheiro final personalizado
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            export_df.to_excel(writer, index=False)
+        
+        seed_clean = seed_input.strip().lower().replace(' ', '_') if seed_input.strip() else "keywords"
+        filename = f"seo_selecionadas_{selected_country_code}_{seed_clean}.xlsx"
+        
+        st.download_button(
+            label="📥 Descarregar Apenas Linhas Selecionadas com SEO (.xlsx)",
+            data=buffer.getvalue(),
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
+    else:
+        st.info("ℹ️ Selecione pelo menos uma linha na tabela acima para gerar os metadados e ativar o botão de download.")
