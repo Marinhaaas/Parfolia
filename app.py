@@ -7,6 +7,8 @@ import requests
 import streamlit as st
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
+from google import genai
+from google.genai import types
 
 # =====================================================================
 # CONFIGURAÇÃO DE CREDENCIAIS SEGURAS (STREAMLIT SECRETS)
@@ -25,9 +27,14 @@ try:
         "pt": st.secrets["constructor"]["key_pt"],
         "es": st.secrets["constructor"]["key_es"]
     }
+    
+    # Inicializa o cliente oficial do Gemini com a chave dos secrets
+    GEMINI_API_KEY = st.secrets["gemini"]["api_key"]
+    ai_client = genai.Client(api_key=GEMINI_API_KEY)
+    
 except KeyError as e:
     st.error(f"❌ Erro: Configuração de Secrets em falta no painel ({e}).")
-    st.info("Por favor, valida as credenciais 'google_ads' e 'constructor' nas definições do teu painel Streamlit Cloud.")
+    st.info("Por favor, valida as credenciais 'google_ads', 'constructor' e 'gemini' nas definições do teu painel Streamlit Cloud.")
     st.stop()
 
 # Lista de Marcas Concorrentes para Excluir
@@ -136,27 +143,38 @@ def get_constructor_products(query, constructor_key):
     return []
 
 # =====================================================================
-# GERADOR DE SEO GRATUITO (ALGORÍTMICO DE ALTA CONVERSÃO)
+# GERAÇÃO DE META DESCRIPTIONS COM IA (GEMINI 2.5 FLASH LITE)
 # =====================================================================
-def generate_seo_metadata(keyword, country_code):
+def generate_ai_meta_description(keyword, country_code):
     """
-    Gera títulos H1 e Meta Descriptions otimizados e dinâmicos de forma gratuita
-    com base na keyword e no idioma selecionado.
+    Chama a API gratuita do Gemini 2.5 Flash Lite para gerar uma meta description
+    única, persuasiva e natural para e-commerce em tempo recorde.
     """
-    clean_kw = keyword.strip().title()
+    idioma = "Português de Portugal (PT-PT)" if country_code == "pt" else "Espanhol moderno (ES)"
     
-    # Remover termos soltos de intenção para o H1 soar natural
-    for clean_term in ["Como", "Qual", "Onde", "Para", "De", "Com", "Online"]:
-        clean_kw = clean_kw.replace(f" {clean_term} ", " ").replace(f"{clean_term} ", "")
+    prompt = f"""
+    Atua como um especialista em SEO para e-commerce de moda e acessórios.
+    Escreve uma Meta Description apelativa e otimizada para uma página de categoria focada na seguinte keyword: "{keyword}".
     
-    if country_code == "pt":
-        h1 = f"{clean_kw.strip()}"
-        description = f"Descubra a nossa coleção exclusiva de {keyword.lower()}. Encontre os melhores estilos online com portes grátis disponíveis e envios rápidos!"
-    else:  # es
-        h1 = f"{clean_kw.strip()}"
-        description = f"Descubre nuestra colección exclusiva de {keyword.lower()}. ¡Encuentra los mejores estilos online con envío rápido y devoluciones sencillas!"
-        
-    return h1, description
+    Requisitos estritos:
+    1. O texto deve estar escrito em {idioma}.
+    2. Comprimento máximo: 155 caracteres (curto e direto).
+    3. Deve incluir a keyword de forma fluida.
+    4. Deve ser uma frase natural de venda (ex: mencionar tendências, novidades, envios rápidos ou estilo), evitando soar repetitiva ou robótica.
+    5. Devolve APENAS a meta description final, sem aspas, sem explicações e sem introduções.
+    """
+    
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash-lite',
+            contents=prompt,
+        )
+        return response.text.strip().replace('"', '')
+    except Exception:
+        if country_code == "pt":
+            return f"Descubra as últimas novidades em {keyword}. Encontre designs exclusivos com envios rápidos na loja online."
+        else:
+            return f"Descubre las últimas novedades en {keyword}. Encuentra diseños exclusivos con envío rápido en la tienda online."
 
 # =====================================================================
 # INTERFACE INTERATIVA (STREAMLIT UI)
@@ -181,9 +199,11 @@ CURRENT_CONSTRUCTOR_KEY = CONSTRUCTOR_KEYS.get(selected_country_code, CONSTRUCTO
 # Input de texto principal
 seed_input = st.text_input("Palavra Semente (Seed Keyword):", placeholder="Ex: vestido de cerimónia")
 
-# Inicializar o estado da tabela para guardar os dados entre cliques e interações de checkbox
+# Inicializar estados da sessão (Cache e Dados)
 if "df_results" not in st.session_state:
     st.session_state.df_results = None
+if "seo_cache" not in st.session_state:
+    st.session_state.seo_cache = {}
 
 if st.button("🚀 Iniciar Análise Corrente", type="primary"):
     if not seed_input.strip():
@@ -191,18 +211,15 @@ if st.button("🚀 Iniciar Análise Corrente", type="primary"):
     else:
         seed = seed_input.strip().lower()
         
-        # Carregar cliente Google Ads
         try:
             google_client = GoogleAdsClient.load_from_dict(CREDENTIALS)
         except Exception as e:
             st.error(f"❌ Falha crítica ao inicializar cliente Google Ads: {e}")
             st.stop()
 
-        # Etapa 1: Varrer Autocomplete
         with st.spinner("🔮 A recolher sugestões no Google Autocomplete..."):
             scraped = get_autocomplete_suggestions(seed, selected_country_code)
         
-        # Filtros e Limpezas de Marcas Concorrentes
         filtered_keywords = []
         for kw in scraped:
             if len(kw.split()) >= 3:
@@ -213,7 +230,6 @@ if st.button("🚀 Iniciar Análise Corrente", type="primary"):
         st.info(f"💡 Foram encontradas {len(long_tails)} keywords Long-Tail que passaram nos filtros iniciais.")
 
         if long_tails:
-            # Etapa 2: Volumes Google Ads
             with st.spinner("📊 A extrair volumes reais do Planificador de Keywords..."):
                 raw_ads = get_google_volumes_historical(google_client, CUSTOMER_ID, long_tails, LANGUAGE_PATH, LOCATION_PATH)
                 df = pd.DataFrame(raw_ads).sort_values(by="Volume Médio Mensal (12 meses)", ascending=False).reset_index(drop=True)
@@ -221,7 +237,6 @@ if st.button("🚀 Iniciar Análise Corrente", type="primary"):
             if not df.empty:
                 top_df = df.head(50).copy()
                 
-                # Etapa 3: Integração Constructor.io com Barra de Progresso Real
                 progress_text = "🔎 A mapear correspondências no índice Constructor.io..."
                 progress_bar = st.progress(0, text=progress_text)
                 
@@ -234,7 +249,6 @@ if st.button("🚀 Iniciar Análise Corrente", type="primary"):
                 progress_bar.empty()
                 top_df['Produtos Constructor'] = product_data
                 
-                # Nova Coluna de Seleção para o utilizador marcar linhas
                 top_df.insert(0, "Selecionar", False)
                 st.session_state.df_results = top_df
             else:
@@ -244,12 +258,11 @@ if st.button("🚀 Iniciar Análise Corrente", type="primary"):
             st.error("❌ Nenhuma keyword válida sobrou após a filtragem de marcas proibidas.")
             st.session_state.df_results = None
 
-# Se existirem dados guardados em cache, mostra o editor interativo
+# Interface de Exibição e Edição
 if st.session_state.df_results is not None:
     st.subheader("📊 Resultados de Top 50 Keywords")
-    st.markdown("💡 *Ative a caixa de seleção na coluna **'Selecionar'** para escolher as linhas que deseja processar e exportar.*")
+    st.markdown("💡 *Ative a caixa de seleção na coluna **'Selecionar'** para gerar as descrições via AI e exportar.*")
     
-    # Renderiza a tabela usando o data_editor, permitindo a edição apenas da coluna "Selecionar"
     edited_df = st.data_editor(
         st.session_state.df_results,
         use_container_width=True,
@@ -263,44 +276,48 @@ if st.session_state.df_results is not None:
         }
     )
     
-    # Filtrar o DataFrame original com base no que o utilizador selecionou no editor visual
     selected_rows = edited_df[edited_df["Selecionar"] == True].copy()
     
     if not selected_rows.empty:
-        st.success(f"✅ {len(selected_rows)} linha(s) selecionada(s). Pronta(s) para enriquecimento de SEO e exportação!")
+        st.success(f"✅ {len(selected_rows)} linha(s) selecionada(s). A processar metadados com Gemini 2.5 Flash Lite...")
         
-        # Gerar metadados em tempo real apenas para os itens escolhidos
         h1_list = []
         desc_list = []
-        for kw in selected_rows['Keyword']:
-            h1, desc = generate_seo_metadata(kw, selected_country_code)
-            h1_list.append(h1)
-            desc_list.append(desc)
+        
+        with st.spinner("🤖 A gerar Meta Descriptions exclusivas com IA..."):
+            for kw in selected_rows['Keyword']:
+                # H1 mantendo exatamente a keyword, com a primeira letra em maiúscula
+                h1_correto = kw.strip().capitalize()
+                h1_list.append(h1_correto)
+                
+                # Meta Description com cache
+                cache_key = f"{selected_country_code}_{kw}"
+                if cache_key not in st.session_state.seo_cache:
+                    st.session_state.seo_cache[cache_key] = generate_ai_meta_description(kw, selected_country_code)
+                
+                desc_list.append(st.session_state.seo_cache[cache_key])
             
         selected_rows['SEO H1 Gerado'] = h1_list
         selected_rows['SEO Meta Description'] = desc_list
         
-        # Remove a coluna booleana técnica de seleção antes do output final
         export_df = selected_rows.drop(columns=["Selecionar"])
         
-        # Mostrar uma antevisão rápida do que vai para o Excel
-        st.write("👀 **Antevisão dos Metadados SEO Gerados Gratuitamente:**")
+        st.write("👀 **Antevisão dos Metadados SEO Gerados:**")
         st.dataframe(export_df[['Keyword', 'SEO H1 Gerado', 'SEO Meta Description']], use_container_width=True, hide_index=True)
         
-        # Criação do Buffer de Download para o ficheiro final personalizado
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             export_df.to_excel(writer, index=False)
         
         seed_clean = seed_input.strip().lower().replace(' ', '_') if seed_input.strip() else "keywords"
-        filename = f"seo_selecionadas_{selected_country_code}_{seed_clean}.xlsx"
+        filename = f"seo_ai_{selected_country_code}_{seed_clean}.xlsx"
         
         st.download_button(
-            label="📥 Descarregar Apenas Linhas Selecionadas com SEO (.xlsx)",
+            label="📥 Descarregar Seleção com SEO Dinâmico (.xlsx)",
             data=buffer.getvalue(),
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
     else:
-        st.info("ℹ️ Selecione pelo menos uma linha na tabela acima para gerar os metadados e ativar o botão de download.")
+        st.info("ℹ️ Selecione linhas na tabela acima para ativar a IA e gerar o ficheiro Excel.")
